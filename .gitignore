@@ -1,0 +1,22 @@
+# Personal financial data - never committed. In DB mode (DATABASE_URL set)
+# these live in Postgres instead; locally they're just files on disk.
+data/
+uploads/
+budgets.json
+category_rules.json
+merchant_overrides.json
+averaging_rules.json
+column_mappings.json
+
+# Unrelated local-only folders
+Inputs/
+Outputs/
+share/
+.claude/
+
+# Python
+__pycache__/
+*.pyc
+
+# Local secrets
+.env

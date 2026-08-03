@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Budget Tracker</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <h1 class="app-title">Budget Tracker</h1>
+    <div class="topbar-actions">
+      <button id="add-expense-btn" class="btn">Add expense</button>
+      <button id="upload-btn" class="btn btn-primary">Upload statement</button>
+      <button id="theme-toggle-btn" class="btn" aria-label="Toggle dark mode">Dark mode</button>
+      <select id="month-select" class="month-select"></select>
+    </div>
+  </header>
+
+  <nav class="tabs">
+    <button class="tab-button active" data-tab="overview">Overview</button>
+    <button class="tab-button" data-tab="transactions">Transactions</button>
+    <button class="tab-button" data-tab="year">Year</button>
+    <button class="tab-button" data-tab="rules">Rules</button>
+  </nav>
+
+  <div id="period-bar" class="period-bar">
+    <div class="period-mode-toggle">
+      <button type="button" class="period-mode-btn active" data-mode="month">Monthly</button>
+      <button type="button" class="period-mode-btn" data-mode="range">Custom range</button>
+    </div>
+    <div id="period-range-controls" class="period-range-controls" hidden>
+      <label class="filter-field">
+        <span>From</span>
+        <input type="date" id="range-start" />
+      </label>
+      <label class="filter-field">
+        <span>To</span>
+        <input type="date" id="range-end" />
+      </label>
+      <button id="range-apply-btn" class="btn btn-primary">Apply</button>
+    </div>
+  </div>
+
+  <main>
+    <section id="overview-tab" class="tab-panel active">
+      <div id="overview-banner"></div>
+      <div id="overview-summary" class="summary-cards"></div>
+      <table class="data-table" id="overview-table">
+        <thead>
+          <tr>
+            <th>Category</th>
+            <th>Budgeted</th>
+            <th>Actual</th>
+            <th>Difference</th>
+            <th>% Used</th>
+            <th>Progress</th>
+          </tr>
+        </thead>
+        <tbody id="overview-tbody"></tbody>
+        <tfoot id="overview-tfoot"></tfoot>
+      </table>
+    </section>
+
+    <section id="transactions-tab" class="tab-panel">
+      <div class="filters-bar">
+        <label class="filter-field">
+          <span>Merchant / Description</span>
+          <input type="text" id="merchant-filter" placeholder="Search..." />
+        </label>
+        <div class="filter-field">
+          <span>Category</span>
+          <div class="multiselect">
+            <button type="button" id="category-filter-btn" class="multiselect-btn">All Categories</button>
+            <div id="category-filter-panel" class="multiselect-panel" hidden></div>
+          </div>
+        </div>
+        <label class="filter-field">
+          <span>Amount</span>
+          <select id="price-filter"></select>
+        </label>
+        <button id="clear-filters-btn" class="btn btn-ghost" hidden>Clear filters</button>
+      </div>
+      <table class="data-table" id="transactions-table">
+        <thead>
+          <tr>
+            <th data-sort="date" class="sortable">Date</th>
+            <th>Merchant / Description</th>
+            <th data-sort="amount" class="sortable">Amount</th>
+            <th>Category</th>
+          </tr>
+        </thead>
+        <tbody id="transactions-tbody"></tbody>
+      </table>
+      <p id="no-transactions" class="empty-state" hidden>No transactions for this month.</p>
+    </section>
+
+    <section id="year-tab" class="tab-panel">
+      <div class="filters-bar">
+        <label class="filter-field">
+          <span>Year</span>
+          <select id="year-select"></select>
+        </label>
+      </div>
+      <div id="year-banner"></div>
+      <div id="year-summary" class="summary-cards"></div>
+      <table class="data-table" id="year-table">
+        <thead>
+          <tr>
+            <th>Category</th>
+            <th>Budgeted</th>
+            <th>Actual</th>
+            <th>Difference</th>
+            <th>% Used</th>
+            <th>Progress</th>
+            <th>Top Month</th>
+          </tr>
+        </thead>
+        <tbody id="year-tbody"></tbody>
+        <tfoot id="year-tfoot"></tfoot>
+      </table>
+
+      <div class="chart-card">
+        <div class="chart-card-header">
+          <h3 class="chart-title">Monthly spend trend</h3>
+          <div class="chart-legend">
+            <span class="legend-item"><span class="legend-swatch legend-swatch-under"></span>Under budget</span>
+            <span class="legend-item"><span class="legend-swatch legend-swatch-over"></span>Over budget</span>
+            <span class="legend-item"><span class="legend-swatch legend-swatch-line"></span>Budget line</span>
+          </div>
+        </div>
+        <div class="chart-canvas-wrap">
+          <canvas id="trend-chart" width="900" height="280"></canvas>
+          <div id="trend-tooltip" class="chart-tooltip" hidden></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="rules-tab" class="tab-panel">
+      <div class="chart-card">
+        <div class="chart-card-header">
+          <h3 class="chart-title">Averaging rules</h3>
+          <span id="averaging-rule-count" class="text-muted"></span>
+        </div>
+        <p class="text-muted">
+          Spreads a transaction's amount evenly across months instead of recording it all in one - checked in order, first match wins. A transaction matching none of these is just recorded in the month it occurred.
+        </p>
+        <div id="averaging-rule-form" class="rule-form"></div>
+        <div id="averaging-rules-list" class="averaging-rules-list"></div>
+      </div>
+
+      <div class="chart-card">
+        <div class="chart-card-header">
+          <h3 class="chart-title">Category keyword rules</h3>
+          <span id="keyword-rule-count" class="text-muted"></span>
+        </div>
+        <p class="text-muted">A transaction auto-categorizes when its merchant text contains one of these keywords.</p>
+        <div class="filters-bar">
+          <label class="filter-field">
+            <span>Search</span>
+            <input type="text" id="keyword-rule-filter" placeholder="Search keywords or categories..." />
+          </label>
+        </div>
+        <div class="rule-add-row">
+          <select id="keyword-rule-category"></select>
+          <input type="text" id="keyword-rule-input" placeholder="Keyword, e.g. STARBUCKS" />
+          <button class="btn btn-primary" id="keyword-rule-add-btn">Add rule</button>
+        </div>
+        <div id="keyword-rules-list" class="rules-groups"></div>
+      </div>
+
+      <div class="chart-card">
+        <div class="chart-card-header">
+          <h3 class="chart-title">Merchant / note overrides</h3>
+          <span id="override-rule-count" class="text-muted"></span>
+        </div>
+        <p class="text-muted">Exact merchant or Venmo/Zelle note text mapped straight to a category - checked before keyword rules.</p>
+        <div class="filters-bar">
+          <label class="filter-field">
+            <span>Search</span>
+            <input type="text" id="override-rule-filter" placeholder="Search merchants or categories..." />
+          </label>
+        </div>
+        <div class="rule-add-row">
+          <input type="text" id="override-rule-input" placeholder="Merchant or note text" />
+          <select id="override-rule-category"></select>
+          <button class="btn btn-primary" id="override-rule-add-btn">Add override</button>
+        </div>
+        <div class="table-scroll">
+          <table class="data-table" id="override-rules-table">
+            <thead>
+              <tr>
+                <th>Merchant / Note</th>
+                <th>Category</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="override-rules-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div id="upload-modal" class="modal-overlay" hidden>
+    <div class="modal">
+      <div class="modal-header">
+        <h2>Upload statement</h2>
+        <button id="upload-close-btn" class="btn btn-ghost btn-icon" aria-label="Close">&times;</button>
+      </div>
+      <div id="upload-modal-body" class="modal-body"></div>
+    </div>
+  </div>
+
+  <div id="add-expense-modal" class="modal-overlay" hidden>
+    <div class="modal">
+      <div class="modal-header">
+        <h2>Add expense</h2>
+        <button id="add-expense-close-btn" class="btn btn-ghost btn-icon" aria-label="Close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="text-muted">For one-off expenses that don't show up on a statement.</p>
+        <div class="mapping-row">
+          <label>Description</label>
+          <input type="text" id="expense-description" placeholder="e.g. Cash tip for movers" />
+        </div>
+        <div class="mapping-row">
+          <label>Amount ($)</label>
+          <input type="number" id="expense-amount" step="0.01" min="0" placeholder="0.00" />
+        </div>
+        <div class="mapping-row">
+          <label>Date</label>
+          <input type="date" id="expense-date" />
+        </div>
+        <div class="mapping-row">
+          <label>Category</label>
+          <select id="expense-category"></select>
+        </div>
+        <div class="modal-actions">
+          <button class="btn btn-primary" id="expense-submit-btn">Add expense</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
