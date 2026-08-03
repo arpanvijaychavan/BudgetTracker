@@ -22,9 +22,13 @@ Minimal local HTTP server (stdlib only, no Flask required) that:
     real files locally and a Postgres table when DATABASE_URL is set (e.g.
     when deployed somewhere without a persistent disk) - see storage.py.
   - If DASHBOARD_USERNAME/DASHBOARD_PASSWORD are set, every request must
-    pass HTTP Basic Auth for those credentials. Unset locally by default,
-    so running this on your own machine has no login friction; set them
-    before deploying anywhere reachable by other people.
+    come from a browser holding a valid session cookie, obtained by logging
+    in at GET /login (POST /login checks the credentials and issues the
+    cookie; POST /logout clears it). The cookie has no Max-Age, so browsers
+    drop it once fully closed - reopening the browser requires logging in
+    again. Unset locally by default, so running this on your own machine
+    has no login friction; set them before deploying anywhere reachable by
+    other people.
 
 Run with:
     python server.py
@@ -36,6 +40,7 @@ import os
 import json
 import base64
 import hmac
+import secrets
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
@@ -47,6 +52,13 @@ PORT = int(os.environ.get("PORT", 8000))
 HOST = os.environ.get("HOST", "0.0.0.0")
 DASHBOARD_USERNAME = os.environ.get("DASHBOARD_USERNAME")
 DASHBOARD_PASSWORD = os.environ.get("DASHBOARD_PASSWORD")
+# Set to "false" to allow the session cookie over plain HTTP - only useful
+# for testing a login locally without HTTPS; leave unset/"true" everywhere else.
+COOKIE_SECURE = os.environ.get("COOKIE_SECURE", "true").lower() != "false"
+SESSION_COOKIE_NAME = "budget_session"
+# In-memory session store - fine for a single-process personal tool; a
+# restart clears everyone's session, which just means logging in again.
+ACTIVE_SESSIONS = set()
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DASHBOARD_DIR = os.path.join(BASE_DIR, "dashboard")
 UPLOADS_DIR = os.path.join(BASE_DIR, "uploads")
@@ -119,30 +131,85 @@ def finalize_rows(rows):
 
 
 class Handler(BaseHTTPRequestHandler):
-    def _check_auth(self):
-        """Returns True if the request may proceed. If DASHBOARD_USERNAME/
+    def _login_required(self):
+        return bool(DASHBOARD_USERNAME and DASHBOARD_PASSWORD)
+
+    def _session_token(self):
+        cookie_header = self.headers.get("Cookie", "")
+        for part in cookie_header.split(";"):
+            part = part.strip()
+            if part.startswith(f"{SESSION_COOKIE_NAME}="):
+                return part[len(SESSION_COOKIE_NAME) + 1:]
+        return None
+
+    def _is_authenticated(self):
+        """True if this request may proceed. If DASHBOARD_USERNAME/
         DASHBOARD_PASSWORD aren't set (the local, no-login default), every
-        request passes. If they are set, requires a matching HTTP Basic Auth
-        header and sends the 401 + WWW-Authenticate challenge (which makes
-        the browser show its native login prompt) when missing/wrong."""
-        if not DASHBOARD_USERNAME or not DASHBOARD_PASSWORD:
+        request passes. Otherwise a valid session cookie (issued by POST
+        /login) is required."""
+        if not self._login_required():
             return True
+        token = self._session_token()
+        return token is not None and token in ACTIVE_SESSIONS
 
-        header = self.headers.get("Authorization", "")
-        if header.startswith("Basic "):
-            try:
-                decoded = base64.b64decode(header[len("Basic "):]).decode("utf-8")
-                username, _, password = decoded.partition(":")
-            except Exception:
-                username, password = "", ""
-            if hmac.compare_digest(username, DASHBOARD_USERNAME) and hmac.compare_digest(password, DASHBOARD_PASSWORD):
-                return True
-
-        self.send_response(401)
-        self.send_header("WWW-Authenticate", 'Basic realm="Budget Tracker"')
+    def _redirect(self, location):
+        self.send_response(302)
+        self.send_header("Location", location)
         self.send_header("Content-Length", "0")
         self.end_headers()
-        return False
+
+    def handle_login_page(self):
+        full_path = os.path.join(DASHBOARD_DIR, "login.html")
+        with open(full_path, "rb") as f:
+            body = f.read()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def handle_login_submit(self):
+        try:
+            payload = self._read_json_body()
+            username = str(payload.get("username", ""))
+            password = str(payload.get("password", ""))
+        except (ValueError, json.JSONDecodeError):
+            self._send_json(400, {"error": "Expected JSON body {username, password}"})
+            return
+
+        if not self._login_required():
+            self._send_json(200, {"ok": True})
+            return
+
+        if not (hmac.compare_digest(username, DASHBOARD_USERNAME) and hmac.compare_digest(password, DASHBOARD_PASSWORD)):
+            self._send_json(401, {"error": "Invalid username or password"})
+            return
+
+        token = secrets.token_urlsafe(32)
+        ACTIVE_SESSIONS.add(token)
+        body = json.dumps({"ok": True}).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        # No Max-Age/Expires => a session cookie, which browsers clear when
+        # fully closed (not just the tab) - so reopening the browser always
+        # requires logging in again.
+        secure = "; Secure" if COOKIE_SECURE else ""
+        self.send_header("Set-Cookie", f"{SESSION_COOKIE_NAME}={token}; HttpOnly; SameSite=Lax; Path=/{secure}")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def handle_logout(self):
+        token = self._session_token()
+        if token:
+            ACTIVE_SESSIONS.discard(token)
+        body = json.dumps({"ok": True}).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Set-Cookie", f"{SESSION_COOKIE_NAME}=; Max-Age=0; Path=/")
+        self.end_headers()
+        self.wfile.write(body)
 
     def _send_json(self, status, payload):
         body = json.dumps(payload).encode("utf-8")
@@ -190,9 +257,19 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
-        if not self._check_auth():
-            return
         path = urlparse(self.path).path
+
+        if path == "/login":
+            self.handle_login_page()
+            return
+
+        # style.css is linked from login.html itself, so it must be
+        # reachable before the user has logged in - otherwise the login
+        # page renders unstyled.
+        if not self._is_authenticated() and path != "/style.css":
+            self._redirect("/login")
+            return
+
         if path in DATA_ENDPOINTS:
             data_path, default = DATA_ENDPOINTS[path]
             self._send_json(200, load_json(data_path, default))
@@ -200,9 +277,19 @@ class Handler(BaseHTTPRequestHandler):
         self._serve_static()
 
     def do_POST(self):
-        if not self._check_auth():
-            return
         path = urlparse(self.path).path
+
+        if path == "/login":
+            self.handle_login_submit()
+            return
+        if path == "/logout":
+            self.handle_logout()
+            return
+
+        if not self._is_authenticated():
+            self._send_json(401, {"error": "Not logged in"})
+            return
+
         routes = {
             "/update-category": self.handle_update_category,
             "/undo-category": self.handle_undo_category,

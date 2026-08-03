@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Log in - Budget Tracker</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body class="login-page">
+  <div class="login-card">
+    <h1 class="app-title">Budget Tracker</h1>
+    <p class="text-muted">Log in to continue.</p>
+    <div id="login-error" class="banner" hidden></div>
+    <div class="mapping-row">
+      <label>Username</label>
+      <input type="text" id="login-username" autocomplete="username" />
+    </div>
+    <div class="mapping-row">
+      <label>Password</label>
+      <input type="password" id="login-password" autocomplete="current-password" />
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-primary" id="login-submit-btn">Log in</button>
+    </div>
+  </div>
+
+  <script>
+    const errorEl = document.getElementById("login-error");
+    const usernameEl = document.getElementById("login-username");
+    const passwordEl = document.getElementById("login-password");
+    const submitBtn = document.getElementById("login-submit-btn");
+
+    async function submitLogin() {
+      errorEl.hidden = true;
+      const username = usernameEl.value.trim();
+      const password = passwordEl.value;
+      if (!username || !password) {
+        errorEl.textContent = "Enter both a username and password.";
+        errorEl.hidden = false;
+        return;
+      }
+
+      try {
+        const res = await fetch("/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username, password }),
+        });
+        if (res.ok) {
+          window.location.href = "/";
+          return;
+        }
+        const data = await res.json().catch(() => ({}));
+        errorEl.textContent = data.error || "Login failed.";
+        errorEl.hidden = false;
+      } catch (err) {
+        errorEl.textContent = "Couldn't reach the server. Try again.";
+        errorEl.hidden = false;
+      }
+    }
+
+    submitBtn.addEventListener("click", submitLogin);
+    passwordEl.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") submitLogin();
+    });
+    usernameEl.focus();
+  </script>
+</body>
+</html>

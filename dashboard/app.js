@@ -83,6 +83,7 @@ const el = {
   uploadCloseBtn: document.getElementById("upload-close-btn"),
   uploadModalBody: document.getElementById("upload-modal-body"),
   themeToggleBtn: document.getElementById("theme-toggle-btn"),
+  logoutBtn: document.getElementById("logout-btn"),
   periodBar: document.getElementById("period-bar"),
   periodRangeControls: document.getElementById("period-range-controls"),
   rangeStart: document.getElementById("range-start"),
@@ -146,6 +147,15 @@ function initTheme() {
 async function init() {
   initTheme();
   await loadData();
+
+  el.logoutBtn.addEventListener("click", async () => {
+    try {
+      await fetch("/logout", { method: "POST" });
+    } catch (err) {
+      // Ignore - redirecting to /login below either way.
+    }
+    window.location.href = "/login";
+  });
 
   el.monthSelect.addEventListener("change", () => {
     state.currentMonth = el.monthSelect.value;
@@ -291,9 +301,18 @@ async function loadData() {
   el.yearSelect.value = state.currentYear;
 }
 
+function redirectToLoginIfUnauthorized(res) {
+  if (res.status === 401) {
+    window.location.href = "/login";
+    return true;
+  }
+  return false;
+}
+
 async function fetchJson(path) {
   try {
     const res = await fetch(path, { cache: "no-store" });
+    if (redirectToLoginIfUnauthorized(res)) return null;
     if (!res.ok) return null;
     return await res.json();
   } catch (err) {
@@ -520,6 +539,7 @@ async function submitExpense() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ date, description, amount, category }),
     });
+    if (redirectToLoginIfUnauthorized(res)) return;
     const result = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(result.error || "Request failed");
 
@@ -1056,6 +1076,7 @@ async function updateCategory(id, newCategory) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id, new_category: newCategory }),
     });
+    if (redirectToLoginIfUnauthorized(res)) return;
     if (!res.ok) throw new Error(await res.text());
     const result = await res.json();
     const undoAction = { label: "Undo", onClick: () => undoCategoryChange(result.undo) };
@@ -1090,6 +1111,7 @@ async function undoCategoryChange(undo) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ undo }),
     });
+    if (redirectToLoginIfUnauthorized(res)) return;
     if (!res.ok) throw new Error(await res.text());
     await loadData();
     renderAll();
@@ -1197,6 +1219,7 @@ async function postJson(path, body) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
+  if (redirectToLoginIfUnauthorized(res)) throw new Error("Redirecting to login...");
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
   return data;
