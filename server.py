@@ -6,6 +6,10 @@ Minimal local HTTP server (stdlib only, no Flask required) that:
   - Exposes POST /update-category to persist manual recategorizations
     from the dashboard back to data/transactions.json and
     merchant_overrides.json.
+  - Exposes POST /delete-transactions and /undo-delete to remove (and
+    restore) individual transactions or a whole set of averaged
+    installments. Deleted transactions are remembered as tombstones so
+    re-uploading an overlapping statement doesn't bring them back.
   - Exposes a small upload wizard (POST /upload, /upload/mapping,
     /upload/categories) so statements can be processed directly from the
     dashboard instead of the terminal. It reuses the exact same parsing,
@@ -293,6 +297,8 @@ class Handler(BaseHTTPRequestHandler):
         routes = {
             "/update-category": self.handle_update_category,
             "/undo-category": self.handle_undo_category,
+            "/delete-transactions": self.handle_delete_transactions,
+            "/undo-delete": self.handle_undo_delete,
             "/add-expense": self.handle_add_expense,
             "/upload": self.handle_upload,
             "/upload/mapping": self.handle_upload_mapping,
@@ -404,6 +410,71 @@ class Handler(BaseHTTPRequestHandler):
                 "previous_override": previous_override,
             },
         })
+
+    # -- deleting transactions ------------------------------------------------
+
+    def handle_delete_transactions(self):
+        try:
+            payload = self._read_json_body()
+            txn_id = payload["id"]
+            scope = payload.get("scope", "one")
+        except (KeyError, ValueError, json.JSONDecodeError):
+            self._send_json(400, {"error": "Expected JSON body {id, scope?}"})
+            return
+        if scope not in ("one", "group"):
+            self._send_json(400, {"error": "scope must be 'one' or 'group'"})
+            return
+
+        all_transactions = load_json(TRANSACTIONS_PATH, {})
+        target = next((t for txns in all_transactions.values() for t in txns if t["id"] == txn_id), None)
+        if target is None:
+            self._send_json(404, {"error": f"No transaction with id {txn_id}"})
+            return
+
+        ids_to_delete = {txn_id}
+        if scope == "group":
+            all_flat = [t for txns in all_transactions.values() for t in txns]
+            ids_to_delete = {t["id"] for t in pt.installment_set(target, all_flat)}
+
+        deleted = []
+        for month, txns in all_transactions.items():
+            deleted.extend(t for t in txns if t["id"] in ids_to_delete)
+            all_transactions[month] = [t for t in txns if t["id"] not in ids_to_delete]
+        save_json(TRANSACTIONS_PATH, all_transactions)
+
+        tombstones = load_json(pt.DELETED_TRANSACTIONS_PATH, [])
+        tombstones.extend([t["date"], t["merchant"], t["amount"]] for t in deleted)
+        save_json(pt.DELETED_TRANSACTIONS_PATH, tombstones)
+
+        self._send_json(200, {"ok": True, "deleted_count": len(deleted), "undo": {"transactions": deleted}})
+
+    def handle_undo_delete(self):
+        try:
+            payload = self._read_json_body()
+            restored = payload["transactions"]
+            for t in restored:
+                t["id"], t["date"], t["merchant"], t["amount"]
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+            self._send_json(400, {"error": "Expected JSON body {transactions: [full transaction objects]}"})
+            return
+
+        all_transactions = load_json(TRANSACTIONS_PATH, {})
+        for t in restored:
+            month_list = all_transactions.setdefault(pt.month_of(t["date"]), [])
+            if not any(existing["id"] == t["id"] for existing in month_list):
+                month_list.append(t)
+        save_json(TRANSACTIONS_PATH, all_transactions)
+
+        # Drop one tombstone per restored transaction so they're no longer
+        # treated as deleted.
+        tombstones = load_json(pt.DELETED_TRANSACTIONS_PATH, [])
+        for t in restored:
+            key = [t["date"], t["merchant"], t["amount"]]
+            if key in tombstones:
+                tombstones.remove(key)
+        save_json(pt.DELETED_TRANSACTIONS_PATH, tombstones)
+
+        self._send_json(200, {"ok": True})
 
     def handle_undo_category(self):
         try:

@@ -89,6 +89,7 @@
             <th>Merchant / Description</th>
             <th data-sort="amount" class="sortable">Amount</th>
             <th>Category</th>
+            <th></th>
           </tr>
         </thead>
         <tbody id="transactions-tbody"></tbody>
@@ -239,6 +240,22 @@
         </div>
         <div class="modal-actions">
           <button class="btn btn-primary" id="expense-submit-btn">Add expense</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="delete-modal" class="modal-overlay" hidden>
+    <div class="modal">
+      <div class="modal-header">
+        <h2>Delete transaction</h2>
+        <button id="delete-modal-close-btn" class="btn btn-ghost btn-icon" aria-label="Close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p id="delete-modal-text"></p>
+        <div class="modal-actions">
+          <button class="btn" id="delete-one-btn">Just this installment</button>
+          <button class="btn btn-primary" id="delete-group-btn">Delete all</button>
         </div>
       </div>
     </div>

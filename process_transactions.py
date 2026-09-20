@@ -31,6 +31,9 @@ COLUMN_MAPPINGS_PATH = os.path.join(BASE_DIR, "column_mappings.json")
 BUDGETS_PATH = os.path.join(BASE_DIR, "budgets.json")
 TRANSACTIONS_PATH = os.path.join(BASE_DIR, "data", "transactions.json")
 AVERAGING_RULES_PATH = os.path.join(BASE_DIR, "averaging_rules.json")
+# [date, merchant, amount] entries for transactions the user deleted, so a
+# re-uploaded overlapping statement doesn't quietly bring them back.
+DELETED_TRANSACTIONS_PATH = os.path.join(BASE_DIR, "deleted_transactions.json")
 
 CATEGORIES = ["Shopping", "Groceries", "Dining", "Transportation", "Travel", "Activities", "Miscellaneous"]
 
@@ -49,7 +52,7 @@ COLUMN_CANDIDATES = {
 # or card fee - always categorized as Miscellaneous (see categorize() below).
 # Whether/how an annual fee gets spread across months is a separate,
 # user-editable concern - see averaging_rules.json / DEFAULT_AVERAGING_RULES.
-ANNUAL_FEE_KEYWORDS = ["ANNUAL FEE", "ANNUAL MEMBERSHIP FEE"]
+ANNUAL_FEE_KEYWORDS = ["ANNUAL FEE", "ANNUAL MEMBERSHIP FEE", "MEMBER FEE"]
 
 # Seeded into averaging_rules.json the first time it's needed. Each rule says
 # how to spread a transaction's amount across months: "category" rules match
@@ -80,6 +83,14 @@ DEFAULT_AVERAGING_RULES = [
         "id": "default-annual-membership-fee",
         "trigger_type": "keyword",
         "trigger_value": "ANNUAL MEMBERSHIP FEE",
+        "min_amount": None,
+        "spread_type": "calendar_year",
+        "months": None,
+    },
+    {
+        "id": "default-member-fee",
+        "trigger_type": "keyword",
+        "trigger_value": "MEMBER FEE",
         "min_amount": None,
         "spread_type": "calendar_year",
         "months": None,
@@ -644,6 +655,37 @@ def natural_key(txn):
     return (txn["date"], txn["merchant"], txn["amount"])
 
 
+INSTALLMENT_SUFFIX_RE = re.compile(r"^(.*) \(avg (\d+)/(\d+)\)$")
+
+
+def installment_group_key(txn):
+    """Identifies which set of averaged installments a transaction belongs to
+    (same merchant/source/base description/installment count/year), or None
+    if it isn't an installment at all."""
+    m = INSTALLMENT_SUFFIX_RE.match(txn["description"])
+    if not m:
+        return None
+    return (txn["merchant"], txn["source_file"], m.group(1), m.group(3), txn["date"][:4])
+
+
+# Installments of one charge differ by at most a few cents (the last one
+# absorbs the rounding remainder); anything further apart is a different
+# charge that just happens to share a merchant/description.
+INSTALLMENT_AMOUNT_TOLERANCE = 0.10
+
+
+def installment_set(target, all_txns):
+    """Every installment belonging to the same original charge as `target`."""
+    key = installment_group_key(target)
+    if key is None:
+        return [target]
+    return [
+        t for t in all_txns
+        if installment_group_key(t) == key
+        and abs(t["amount"] - target["amount"]) <= INSTALLMENT_AMOUNT_TOLERANCE
+    ]
+
+
 def merge_transactions(new_transactions):
     """Dedupe by content, not by row position. Each month keeps a multiset
     (Counter) of (date, merchant, amount) keys already on file. A new
@@ -656,6 +698,12 @@ def merge_transactions(new_transactions):
     """
     all_transactions = load_json(TRANSACTIONS_PATH, {})
     added, skipped = 0, 0
+
+    # Transactions the user deleted. Consumed in memory only (never saved
+    # back), one match per incoming copy, so an overlapping re-upload can't
+    # resurrect them but a genuinely new identical charge beyond the deleted
+    # count still gets through.
+    tombstones = Counter(tuple(k) for k in load_json(DELETED_TRANSACTIONS_PATH, []))
 
     by_month = {}
     for txn in new_transactions:
@@ -670,6 +718,10 @@ def merge_transactions(new_transactions):
             key = natural_key(txn)
             if unmatched_existing[key] > 0:
                 unmatched_existing[key] -= 1
+                skipped += 1
+                continue
+            if tombstones[key] > 0:
+                tombstones[key] -= 1
                 skipped += 1
                 continue
 

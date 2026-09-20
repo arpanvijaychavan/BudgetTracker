@@ -90,6 +90,11 @@ const el = {
   rangeEnd: document.getElementById("range-end"),
   rangeApplyBtn: document.getElementById("range-apply-btn"),
   addExpenseBtn: document.getElementById("add-expense-btn"),
+  deleteModal: document.getElementById("delete-modal"),
+  deleteModalText: document.getElementById("delete-modal-text"),
+  deleteModalCloseBtn: document.getElementById("delete-modal-close-btn"),
+  deleteOneBtn: document.getElementById("delete-one-btn"),
+  deleteGroupBtn: document.getElementById("delete-group-btn"),
   addExpenseModal: document.getElementById("add-expense-modal"),
   addExpenseCloseBtn: document.getElementById("add-expense-close-btn"),
   expenseDescription: document.getElementById("expense-description"),
@@ -222,6 +227,11 @@ async function init() {
 
   el.addExpenseBtn.addEventListener("click", openAddExpenseModal);
   el.addExpenseCloseBtn.addEventListener("click", closeAddExpenseModal);
+  el.deleteModalCloseBtn.addEventListener("click", closeDeleteModal);
+  el.deleteModal.addEventListener("click", (e) => {
+    if (e.target === el.deleteModal) closeDeleteModal();
+  });
+
   el.addExpenseModal.addEventListener("click", (e) => {
     if (e.target === el.addExpenseModal) closeAddExpenseModal();
   });
@@ -1044,6 +1054,7 @@ function renderTransactions() {
       <td data-label="Merchant">${merchantDisplay}</td>
       <td data-label="Amount" class="amount">${formatCurrency(txn.amount)}</td>
       <td data-label="Category"><span class="category-cell">${categoryDot(txn.category)}<select class="category-select" data-id="${txn.id}">${options}</select></span></td>
+      <td data-label=""><button type="button" class="rule-remove-btn txn-delete-btn" data-id="${txn.id}">Delete</button></td>
     `;
     el.transactionsTbody.appendChild(tr);
   });
@@ -1051,6 +1062,97 @@ function renderTransactions() {
   el.transactionsTbody.querySelectorAll(".category-select").forEach((select) => {
     select.addEventListener("change", (e) => updateCategory(e.target.dataset.id, e.target.value));
   });
+
+  el.transactionsTbody.querySelectorAll(".txn-delete-btn").forEach((btn) => {
+    btn.addEventListener("click", () => requestDelete(btn.dataset.id));
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Deleting transactions. A plain transaction deletes immediately (with an
+// Undo toast); one that's part of an averaged set of installments asks
+// whether to remove just that month or the whole set.
+// ---------------------------------------------------------------------------
+
+const INSTALLMENT_RE = /^(.*) \(avg (\d+)\/(\d+)\)$/;
+
+function installmentGroupKey(txn) {
+  const m = INSTALLMENT_RE.exec(txn.description || "");
+  if (!m) return null;
+  return [txn.merchant, txn.source_file, m[1], m[3], txn.date.slice(0, 4)].join("|");
+}
+
+// Mirrors INSTALLMENT_AMOUNT_TOLERANCE in process_transactions.py: installments
+// of one charge differ by cents at most, so a bigger gap means a different
+// charge that merely shares a merchant/description.
+const INSTALLMENT_AMOUNT_TOLERANCE = 0.1;
+
+function installmentSetSize(txn, all) {
+  const key = installmentGroupKey(txn);
+  if (!key) return 1;
+  return all.filter(
+    (t) => installmentGroupKey(t) === key && Math.abs(t.amount - txn.amount) <= INSTALLMENT_AMOUNT_TOLERANCE
+  ).length;
+}
+
+let pendingDeleteId = null;
+
+function requestDelete(id) {
+  const all = Object.values(state.transactionsByMonth).flat();
+  const txn = all.find((t) => t.id === id);
+  if (!txn) return;
+
+  const groupSize = installmentSetSize(txn, all);
+  if (groupSize <= 1) {
+    deleteTransaction(id, "one");
+    return;
+  }
+
+  pendingDeleteId = id;
+  el.deleteModalText.textContent =
+    `"${cleanMerchantName(txn.merchant || txn.description)}" is spread across ${groupSize} months. ` +
+    `Delete only this month's installment, or the entire set?`;
+  el.deleteGroupBtn.textContent = `Delete all ${groupSize}`;
+  el.deleteOneBtn.onclick = () => {
+    closeDeleteModal();
+    deleteTransaction(id, "one");
+  };
+  el.deleteGroupBtn.onclick = () => {
+    closeDeleteModal();
+    deleteTransaction(id, "group");
+  };
+  el.deleteModal.hidden = false;
+}
+
+function closeDeleteModal() {
+  el.deleteModal.hidden = true;
+  pendingDeleteId = null;
+}
+
+async function deleteTransaction(id, scope) {
+  try {
+    const result = await postJson("/delete-transactions", { id, scope });
+    await loadData();
+    renderAll();
+    const n = result.deleted_count;
+    showToast(`Deleted ${n} transaction${n === 1 ? "" : "s"}.`, false, {
+      label: "Undo",
+      onClick: () => undoDelete(result.undo),
+    });
+  } catch (err) {
+    showToast(err.message || "Failed to delete. Is server.py running?", true);
+  }
+}
+
+async function undoDelete(undo) {
+  try {
+    await postJson("/undo-delete", undo);
+    await loadData();
+    renderAll();
+    showToast("Deletion undone.");
+  } catch (err) {
+    showToast(err.message || "Failed to undo. Is server.py running?", true);
+  }
 }
 
 function cleanMerchantName(name) {
