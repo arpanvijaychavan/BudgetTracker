@@ -534,8 +534,8 @@ async function submitExpense() {
     showToast("Enter a description.", true);
     return;
   }
-  if (!amount || amount <= 0) {
-    showToast("Enter a valid amount.", true);
+  if (!amount) {
+    showToast("Enter a non-zero amount (negative for a repayment).", true);
     return;
   }
   if (!date) {
@@ -556,10 +556,11 @@ async function submitExpense() {
     closeAddExpenseModal();
     await loadData();
     renderAll();
+    const noun = amount < 0 ? "Repayment" : "Expense";
     showToast(
       result.split
-        ? "Expense added and spread across months per your averaging rules."
-        : "Expense added."
+        ? `${noun} added and spread across months per your averaging rules.`
+        : `${noun} added.`
     );
   } catch (err) {
     showToast(err.message || "Failed to add expense. Is server.py running?", true);
