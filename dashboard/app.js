@@ -90,6 +90,12 @@ const el = {
   rangeEnd: document.getElementById("range-end"),
   rangeApplyBtn: document.getElementById("range-apply-btn"),
   addExpenseBtn: document.getElementById("add-expense-btn"),
+  budgetModal: document.getElementById("budget-modal"),
+  budgetModalText: document.getElementById("budget-modal-text"),
+  budgetModalCloseBtn: document.getElementById("budget-modal-close-btn"),
+  budgetAmount: document.getElementById("budget-amount"),
+  budgetScope: document.getElementById("budget-scope"),
+  budgetSaveBtn: document.getElementById("budget-save-btn"),
   deleteModal: document.getElementById("delete-modal"),
   deleteModalText: document.getElementById("delete-modal-text"),
   deleteModalCloseBtn: document.getElementById("delete-modal-close-btn"),
@@ -227,6 +233,15 @@ async function init() {
 
   el.addExpenseBtn.addEventListener("click", openAddExpenseModal);
   el.addExpenseCloseBtn.addEventListener("click", closeAddExpenseModal);
+  el.budgetModalCloseBtn.addEventListener("click", closeBudgetModal);
+  el.budgetModal.addEventListener("click", (e) => {
+    if (e.target === el.budgetModal) closeBudgetModal();
+  });
+  el.budgetSaveBtn.addEventListener("click", submitBudget);
+  el.budgetAmount.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") submitBudget();
+  });
+
   el.deleteModalCloseBtn.addEventListener("click", closeDeleteModal);
   el.deleteModal.addEventListener("click", (e) => {
     if (e.target === el.deleteModal) closeDeleteModal();
@@ -572,17 +587,20 @@ function categoryDot(category) {
   return `<span class="cat-dot" style="background:${color}"></span>`;
 }
 
-function renderBudgetRow(category, budgeted, actual) {
+function renderBudgetRow(category, budgeted, actual, editable = false) {
   const diff = budgeted - actual;
   const pct = budgeted > 0 ? (actual / budgeted) * 100 : actual > 0 ? 100 : 0;
   const over = actual > budgeted;
   const wayOver = budgeted > 0 && pct >= 150;
 
   const overflowBadge = over ? `<span class="overflow-badge">${Math.round(pct)}%</span>` : "";
+  const budgetedDisplay = editable
+    ? `<button type="button" class="budget-edit-btn" data-category="${category}" title="Click to adjust this budget">${formatCurrency(budgeted)}</button>`
+    : formatCurrency(budgeted);
 
   return `
     <td data-label="Category"><span class="category-cell">${categoryDot(category)}${category}</span></td>
-    <td data-label="Budgeted" class="amount">${formatCurrency(budgeted)}</td>
+    <td data-label="Budgeted" class="amount">${budgetedDisplay}</td>
     <td data-label="Actual" class="amount">${formatCurrency(actual)}</td>
     <td data-label="Difference" class="amount ${over ? "over-budget" : "under-budget"}">${diff >= 0 ? "+" : "-"}${formatCurrency(Math.abs(diff))}</td>
     <td data-label="% Used" class="amount">${pct.toFixed(0)}%${overflowBadge}</td>
@@ -967,8 +985,14 @@ function renderOverview() {
     totalActual += actual;
 
     const tr = document.createElement("tr");
-    tr.innerHTML = renderBudgetRow(category, budgeted, actual);
+    // A custom date range shows prorated budgets that don't exist as real
+    // numbers anywhere, so only the plain monthly view is editable.
+    tr.innerHTML = renderBudgetRow(category, budgeted, actual, !isRange);
     el.overviewTbody.appendChild(tr);
+  });
+
+  el.overviewTbody.querySelectorAll(".budget-edit-btn").forEach((btn) => {
+    btn.addEventListener("click", () => openBudgetModal(btn.dataset.category));
   });
 
   const totalDiff = totalBudget - totalActual;
@@ -1067,6 +1091,67 @@ function renderTransactions() {
   el.transactionsTbody.querySelectorAll(".txn-delete-btn").forEach((btn) => {
     btn.addEventListener("click", () => requestDelete(btn.dataset.id));
   });
+}
+
+// ---------------------------------------------------------------------------
+// Adjusting category budgets (click a Budgeted amount on the Overview tab).
+// ---------------------------------------------------------------------------
+
+let budgetEditCategory = null;
+
+function openBudgetModal(category) {
+  budgetEditCategory = category;
+  const current = (state.budgets[state.currentMonth] || {})[category] || 0;
+  el.budgetModalText.textContent = `${category} budget, starting from ${formatMonthLabel(state.currentMonth)}.`;
+  el.budgetAmount.value = current;
+  el.budgetScope.value = "future";
+  el.budgetModal.hidden = false;
+  el.budgetAmount.focus();
+  el.budgetAmount.select();
+}
+
+function closeBudgetModal() {
+  el.budgetModal.hidden = true;
+  budgetEditCategory = null;
+}
+
+async function submitBudget() {
+  const amount = parseFloat(el.budgetAmount.value);
+  if (isNaN(amount) || amount < 0) {
+    showToast("Enter a budget of $0 or more.", true);
+    return;
+  }
+
+  const category = budgetEditCategory;
+  try {
+    const result = await postJson("/budgets/update", {
+      month: state.currentMonth,
+      category,
+      amount,
+      scope: el.budgetScope.value,
+    });
+    closeBudgetModal();
+    await loadData();
+    renderAll();
+    const n = result.updated_months;
+    showToast(`${category} budget updated for ${n} month${n === 1 ? "" : "s"}.`, false, {
+      label: "Undo",
+      onClick: () => undoBudgetChange(result.undo),
+    });
+  } catch (err) {
+    showToast(err.message || "Failed to update budget. Is server.py running?", true);
+  }
+}
+
+async function undoBudgetChange(undo) {
+  try {
+    await postJson("/budgets/restore", undo);
+    await loadData();
+    renderAll();
+    showToast("Budget change undone.");
+  } catch (err) {
+    showToast(err.message || "Failed to undo. Is server.py running?", true);
+  }
 }
 
 // ---------------------------------------------------------------------------

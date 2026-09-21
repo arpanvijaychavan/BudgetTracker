@@ -246,6 +246,33 @@
     </div>
   </div>
 
+  <div id="budget-modal" class="modal-overlay" hidden>
+    <div class="modal">
+      <div class="modal-header">
+        <h2>Adjust budget</h2>
+        <button id="budget-modal-close-btn" class="btn btn-ghost btn-icon" aria-label="Close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p id="budget-modal-text" class="text-muted"></p>
+        <div class="mapping-row">
+          <label>Budget ($)</label>
+          <input type="number" id="budget-amount" step="0.01" min="0" />
+        </div>
+        <div class="mapping-row">
+          <label>Apply to</label>
+          <select id="budget-scope">
+            <option value="future">This month and all later months</option>
+            <option value="month">This month only</option>
+            <option value="all">All months</option>
+          </select>
+        </div>
+        <div class="modal-actions">
+          <button class="btn btn-primary" id="budget-save-btn">Save</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div id="delete-modal" class="modal-overlay" hidden>
     <div class="modal">
       <div class="modal-header">

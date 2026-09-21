@@ -1073,3 +1073,21 @@ th.sortable:hover {
 .login-card .modal-actions .btn {
   flex: 1;
 }
+
+/* -- Editable budget amounts ------------------------------------------ */
+
+.budget-edit-btn {
+  background: none;
+  border: none;
+  border-bottom: 1px dashed var(--text-muted);
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+
+.budget-edit-btn:hover {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}

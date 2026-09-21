@@ -6,6 +6,9 @@ Minimal local HTTP server (stdlib only, no Flask required) that:
   - Exposes POST /update-category to persist manual recategorizations
     from the dashboard back to data/transactions.json and
     merchant_overrides.json.
+  - Exposes POST /budgets/update and /budgets/restore so category budgets
+    can be adjusted from the Overview tab (this month, this and later
+    months, or all months) with Undo.
   - Exposes POST /delete-transactions and /undo-delete to remove (and
     restore) individual transactions or a whole set of averaged
     installments. Deleted transactions are remembered as tombstones so
@@ -41,6 +44,9 @@ Then open:
 """
 
 import os
+import re
+import copy
+import math
 import json
 import base64
 import hmac
@@ -297,6 +303,8 @@ class Handler(BaseHTTPRequestHandler):
         routes = {
             "/update-category": self.handle_update_category,
             "/undo-category": self.handle_undo_category,
+            "/budgets/update": self.handle_update_budget,
+            "/budgets/restore": self.handle_restore_budgets,
             "/delete-transactions": self.handle_delete_transactions,
             "/undo-delete": self.handle_undo_delete,
             "/add-expense": self.handle_add_expense,
@@ -410,6 +418,71 @@ class Handler(BaseHTTPRequestHandler):
                 "previous_override": previous_override,
             },
         })
+
+    # -- category budgets (budgets.json) ---------------------------------------
+
+    def handle_update_budget(self):
+        try:
+            payload = self._read_json_body()
+            month = str(payload["month"])
+            category = payload["category"]
+            amount = float(payload["amount"])
+            scope = payload.get("scope", "month")
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+            self._send_json(400, {"error": "Expected JSON body {month, category, amount, scope?}"})
+            return
+        if not re.fullmatch(r"\d{4}-\d{2}", month):
+            self._send_json(400, {"error": f"Invalid month '{month}'"})
+            return
+        if category not in pt.CATEGORIES:
+            self._send_json(400, {"error": f"Unknown category '{category}'"})
+            return
+        if not math.isfinite(amount) or amount < 0:
+            self._send_json(400, {"error": "Budget must be a number, zero or more"})
+            return
+        if scope not in ("month", "future", "all"):
+            self._send_json(400, {"error": "scope must be 'month', 'future', or 'all'"})
+            return
+
+        amount = int(amount) if amount == int(amount) else round(amount, 2)
+        budgets = load_json(pt.BUDGETS_PATH, {})
+        previous = copy.deepcopy(budgets)
+
+        # A month with no budget yet starts from the closest earlier month's
+        # budget (or zeros), so editing one category doesn't zero the rest.
+        if month not in budgets:
+            earlier = sorted(m for m in budgets if m < month)
+            budgets[month] = dict(budgets[earlier[-1]]) if earlier else {c: 0 for c in pt.CATEGORIES}
+
+        if scope == "month":
+            targets = [month]
+        elif scope == "future":
+            targets = [m for m in budgets if m >= month]
+        else:
+            targets = list(budgets)
+        for m in targets:
+            budgets[m][category] = amount
+
+        save_json(pt.BUDGETS_PATH, budgets)
+        self._send_json(200, {"ok": True, "updated_months": len(targets), "undo": {"budgets": previous}})
+
+    def handle_restore_budgets(self):
+        try:
+            payload = self._read_json_body()
+            budgets = payload["budgets"]
+            valid = isinstance(budgets, dict) and all(
+                re.fullmatch(r"\d{4}-\d{2}", m)
+                and isinstance(cats, dict)
+                and all(isinstance(v, (int, float)) for v in cats.values())
+                for m, cats in budgets.items()
+            )
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+            valid = False
+        if not valid:
+            self._send_json(400, {"error": "Expected JSON body {budgets: {YYYY-MM: {category: amount}}}"})
+            return
+        save_json(pt.BUDGETS_PATH, budgets)
+        self._send_json(200, {"ok": True})
 
     # -- deleting transactions ------------------------------------------------
 
